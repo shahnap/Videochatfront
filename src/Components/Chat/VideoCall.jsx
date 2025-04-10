@@ -50,12 +50,21 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         const configuration = {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            // Add a TURN server for better connectivity through NATs
+            { urls: 'stun:global.stun.twilio.com:3478?transport=udp' },
             {
               urls: 'turn:numb.viagenie.ca',
               credential: 'muazkh',
               username: 'webrtc@live.com'
+            },
+            {
+              urls: 'turn:openrelay.metered.ca:80',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            },
+            {
+              urls: 'turn:openrelay.metered.ca:443',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
             }
           ]
         };
@@ -105,11 +114,21 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         // Handle remote stream
         peerConnection.ontrack = (event) => {
           console.log('Received remote track:', event.track.kind);
-          setRemoteStream(event.streams[0]);
+          if (!remoteStream) {
+            // Create a new stream if one doesn't exist
+            const newStream = new MediaStream();
+            setRemoteStream(newStream);
+            if (remoteVideoRef.current) {
+              remoteVideoRef.current.srcObject = newStream;
+            }
+          }
           
-          if (remoteVideoRef.current) {
-            console.log('Setting remote video stream');
-            remoteVideoRef.current.srcObject = event.streams[0];
+          // Add the track to the stream
+          const currentStream = remoteVideoRef.current?.srcObject || new MediaStream();
+          currentStream.addTrack(event.track);
+          
+          if (remoteVideoRef.current && !remoteVideoRef.current.srcObject) {
+            remoteVideoRef.current.srcObject = currentStream;
           }
         };
         
@@ -189,10 +208,9 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
     const handleIceCandidate = async (data) => {
       try {
         if (data.from === otherUser) {
-          console.log('Received ICE candidate from:', data.from);
+          console.log('Received ICE candidate:', JSON.stringify(data.candidate));
           const candidate = new RTCIceCandidate(data.candidate);
           await peerConnectionRef.current.addIceCandidate(candidate);
-          console.log('Successfully added ICE candidate');
         }
       } catch (error) {
         console.error('Error adding ICE candidate:', error);
