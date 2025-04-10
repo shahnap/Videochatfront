@@ -20,26 +20,38 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
     
     const initializeMedia = async () => {
       try {
-        console.log('Initializing media...');
-        
-        // 1. Verify secure context
+        console.log('Requesting user media...');
+        // First check if we're in a secure context
         if (!window.isSecureContext) {
-          throw new Error("WebRTC requires HTTPS or localhost.");
+          const errorMsg = "WebRTC requires HTTPS or localhost. Try accessing via 'localhost' instead of IP address.";
+          console.error(errorMsg);
+          setCallStatus('error');
+          alert(errorMsg);
+          return;
         }
-    
-        // 2. Get user media
+        
+       
+        
+        console.log('Requesting user media...');
         const stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: true
         });
+        
+        console.log('Local stream obtained successfully');
         setLocalStream(stream);
-        localVideoRef.current.srcObject = stream;
-    
-        // 3. Configure ICE servers (fixed version)
+        
+        if (localVideoRef.current) {
+          console.log('Setting local video stream');
+          localVideoRef.current.srcObject = stream;
+        }
+        
+        // Create peer connection
         const configuration = {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' }, // Fixed URL
+            { urls: 'stun:stun1.l.google.com:19302' },
+            // Add a TURN server for better connectivity through NATs
             {
               urls: 'turn:numb.viagenie.ca',
               credential: 'muazkh',
@@ -47,16 +59,107 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
             }
           ]
         };
-    
-        // 4. Create peer connection
+        
+        console.log('Creating RTCPeerConnection with config:', configuration);
         const peerConnection = new RTCPeerConnection(configuration);
         peerConnectionRef.current = peerConnection;
-    
-        // Rest of your peer connection setup...
         
+        // Monitor connection state changes
+        peerConnection.onconnectionstatechange = (event) => {
+          console.log('Connection state changed:', peerConnection.connectionState);
+          setConnectionState(peerConnection.connectionState);
+          
+          if (peerConnection.connectionState === 'connected') {
+            setCallStatus('connected');
+          } else if (peerConnection.connectionState === 'failed' || 
+                    peerConnection.connectionState === 'disconnected') {
+            setCallStatus('failed');
+          }
+        };
+        
+        peerConnection.oniceconnectionstatechange = (event) => {
+          console.log('ICE connection state:', peerConnection.iceConnectionState);
+        };
+        
+        // Add local stream to peer connection
+        console.log('Adding local tracks to peer connection');
+        stream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, stream);
+          console.log(`Added ${track.kind} track to peer connection`);
+        });
+        
+        // Handle ICE candidates
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log('Generated ICE candidate, sending to:', otherUser);
+            socket.emit('ice-candidate', {
+              to: otherUser,
+              from: currentUser.username,
+              candidate: event.candidate
+            });
+          } else {
+            console.log('ICE gathering complete');
+          }
+        };
+        
+        // Handle remote stream
+        peerConnection.ontrack = (event) => {
+          console.log('Received remote track:', event.track.kind);
+          setRemoteStream(event.streams[0]);
+          
+          if (remoteVideoRef.current) {
+            console.log('Setting remote video stream');
+            remoteVideoRef.current.srcObject = event.streams[0];
+          }
+        };
+        
+        // Initiate call if initiator
+        if (callData.isInitiator) {
+          console.log('I am the initiator, creating offer');
+          const offer = await peerConnection.createOffer();
+          console.log('Setting local description (offer)');
+          await peerConnection.setLocalDescription(offer);
+          
+          console.log('Sending call offer to:', otherUser);
+          socket.emit('call-user', {
+            to: otherUser,
+            from: currentUser.username,
+            offer: offer
+          });
+        }
+        // Answer call if receiver
+        else if (callData.offer) {
+          console.log('I am the receiver, processing offer');
+          console.log('Setting remote description (offer)');
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(callData.offer));
+          
+          console.log('Creating answer');
+          const answer = await peerConnection.createAnswer();
+          console.log('Setting local description (answer)');
+          await peerConnection.setLocalDescription(answer);
+          
+          console.log('Sending answer to:', otherUser);
+          socket.emit('make-answer', {
+            to: otherUser,
+            from: currentUser.username,
+            answer: answer
+          });
+        }
       } catch (error) {
-        console.error('Initialization error:', error);
-        // Handle errors as shown above
+        console.error('Error accessing media devices:', error);
+        setCallStatus('error');
+        alert(`Media error: ${error.message}. Please check camera/microphone permissions.`);
+        if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+          alert('No camera or microphone found. Please connect a device.');
+        } else if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+          alert('Camera/microphone permission denied. Please allow access in your browser settings.');
+        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+          alert('Your camera or microphone is already in use by another application.');
+        } else if (error.message && error.message.includes('getUserMedia')) {
+          alert('WebRTC is limited on insecure origins. Try using localhost instead of IP address, or enable HTTPS.');
+        } else {
+          alert(`Media error: ${error.message}. Please check camera/microphone permissions.`);
+        }
       }
     };
     
@@ -86,9 +189,10 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
     const handleIceCandidate = async (data) => {
       try {
         if (data.from === otherUser) {
-          console.log('Received ICE candidate:', JSON.stringify(data.candidate));
+          console.log('Received ICE candidate from:', data.from);
           const candidate = new RTCIceCandidate(data.candidate);
           await peerConnectionRef.current.addIceCandidate(candidate);
+          console.log('Successfully added ICE candidate');
         }
       } catch (error) {
         console.error('Error adding ICE candidate:', error);
