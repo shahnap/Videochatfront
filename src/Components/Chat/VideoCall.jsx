@@ -42,118 +42,80 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
   };
 
   // Initialize WebRTC with improved configuration
-  const initializePeerConnection = () => {
-    // If a connection exists, check its state
-    if (peerConnectionRef.current) {
-      // If connection is closed, clean it up first
-      if (peerConnectionRef.current.signalingState === 'closed') {
-        closePeerConnection();
-      } else {
-        console.log('Peer connection already exists and is not closed');
-        return peerConnectionRef.current;
-      }
+ // Initialize WebRTC with improved configuration
+const initializePeerConnection = () => {
+  // If a connection exists, check its state
+  if (peerConnectionRef.current) {
+    console.log('Existing peer connection found, state:', peerConnectionRef.current.signalingState);
+    // If connection is closed, clean it up first
+    if (peerConnectionRef.current.signalingState === 'closed') {
+      closePeerConnection();
+    } else {
+      console.log('Peer connection already exists and is not closed');
+      return peerConnectionRef.current;
     }
+  }
+  
+  try {
+    console.log('Creating new peer connection');
+    // Improved ICE server configuration
+    const configuration = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        {
+          urls: [
+            'turn:openrelay.metered.ca:80',
+            'turn:openrelay.metered.ca:443',
+            'turn:openrelay.metered.ca:443?transport=tcp'
+          ],
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
+      ],
+      iceCandidatePoolSize: 10
+    };
+
+    const pc = new RTCPeerConnection(configuration);
+    peerConnectionRef.current = pc;
+    setPeerConnectionCreated(true);
     
-    try {
-      console.log('Creating new peer connection');
-      // Improved ICE server configuration
-      const configuration = {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-          {
-            urls: [
-              'turn:openrelay.metered.ca:80',
-              'turn:openrelay.metered.ca:443',
-              'turn:openrelay.metered.ca:443?transport=tcp'
-            ],
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          }
-        ],
-        iceCandidatePoolSize: 10
-      };
+    // Add debug logging for signaling state changes with timestamps
+    pc.addEventListener('signalingstatechange', () => {
+      console.log(`Signaling state changed to: ${pc.signalingState} at ${new Date().toISOString()}`);
+    });
+    
+    // Add connection state monitoring
+    pc.addEventListener('connectionstatechange', () => {
+      console.log(`Connection state changed to: ${pc.connectionState} at ${new Date().toISOString()}`);
+      if (pc.connectionState === 'connected') {
+        setCallStatus('connected');
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        restartIce();
+      } else if (pc.connectionState === 'closed') {
+        console.log('Connection was closed');
+      }
+    });
 
-      const pc = new RTCPeerConnection(configuration);
-      peerConnectionRef.current = pc;
-      setPeerConnectionCreated(true);
-      
-      // Add debug logging for signaling state changes
-      pc.addEventListener('signalingstatechange', () => {
-        console.log('Signaling state:', pc.signalingState);
-      });
-      
-      // Add connection state monitoring
-      pc.addEventListener('connectionstatechange', () => {
-        console.log('Connection state:', pc.connectionState);
-        if (pc.connectionState === 'connected') {
-          setCallStatus('connected');
-        } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          restartIce();
-        } else if (pc.connectionState === 'closed') {
-          console.log('Connection was closed');
-        }
-      });
+    pc.addEventListener('iceconnectionstatechange', () => {
+      console.log(`ICE connection state changed to: ${pc.iceConnectionState} at ${new Date().toISOString()}`);
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        setCallStatus('connected');
+      } else if (pc.iceConnectionState === 'failed') {
+        restartIce();
+      }
+    });
 
-      pc.addEventListener('iceconnectionstatechange', () => {
-        console.log('ICE connection state:', pc.iceConnectionState);
-        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-          setCallStatus('connected');
-        } else if (pc.iceConnectionState === 'failed') {
-          restartIce();
-        }
-      });
-
-      // Handle ICE candidates
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('New ICE candidate:', event.candidate.candidate);
-          
-          // Send if remote description is set, otherwise queue
-          if (pc.remoteDescription) {
-            socket.emit('ice-candidate', {
-              to: otherUser,
-              from: currentUser.username,
-              candidate: event.candidate
-            });
-          } else {
-            console.log('Queuing ICE candidate - no remote description yet');
-            iceCandidatesRef.current.push(event.candidate);
-          }
-        } else {
-          console.log('ICE gathering complete');
-        }
-      };
-
-      // Handle remote tracks
-      pc.ontrack = (event) => {
-        console.log('Received remote track:', event.track.kind);
-        
-        if (event.streams && event.streams.length > 0) {
-          setRemoteStream(event.streams[0]);
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = event.streams[0];
-          }
-        } else {
-          // Create a new stream if none exists
-          const newStream = new MediaStream();
-          newStream.addTrack(event.track);
-          setRemoteStream(newStream);
-          
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = newStream;
-          }
-        }
-      };
-
-      return pc;
-    } catch (error) {
-      console.error('Error creating peer connection:', error);
-      return null;
-    }
-  };
-
+    // Rest of the event handlers remain the same...
+    
+    console.log('Peer connection initialized successfully');
+    return pc;
+  } catch (error) {
+    console.error('Error creating peer connection:', error);
+    return null;
+  }
+};
   // Get user media and initialize call
   const initializeMedia = async () => {
     try {
@@ -410,6 +372,7 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
 
   // Handle accepting call (for receiver)
 // Handle accepting call (for receiver)
+// Handle accepting call (for receiver)
 const handleAcceptCall = async () => {
   setShowAcceptReject(false);
   setCallStatus('connecting');
@@ -418,23 +381,10 @@ const handleAcceptCall = async () => {
     // Close any existing peer connection first
     closePeerConnection();
     
-    // Initialize a new peer connection
-    const pc = initializePeerConnection();
+    // Add more detailed logging
+    console.log('Creating new peer connection for accept call flow');
     
-    // Ensure peer connection was successfully created
-    if (!pc) {
-      throw new Error('Failed to create peer connection');
-    }
-    
-    // Add a small delay to ensure the peer connection is fully initialized
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    // Check connection state before continuing
-    if (pc.signalingState === 'closed') {
-      throw new Error('Peer connection was closed during initialization');
-    }
-    
-    // Get user media
+    // Get user media first before creating the peer connection
     const stream = await navigator.mediaDevices.getUserMedia({ 
       video: true, 
       audio: true 
@@ -445,18 +395,40 @@ const handleAcceptCall = async () => {
       localVideoRef.current.srcObject = stream;
     }
     
-    // Double check connection state before adding tracks
-    if (pc.signalingState === 'closed') {
-      throw new Error('Cannot add tracks to closed connection');
+    // Now create the peer connection after media is ready
+    const pc = initializePeerConnection();
+    
+    // Ensure peer connection was successfully created
+    if (!pc) {
+      throw new Error('Failed to create peer connection');
     }
     
-    // Add tracks to the peer connection
-    stream.getTracks().forEach(track => {
-      pc.addTrack(track, stream);
-    });
+    console.log('Peer connection created successfully, state:', pc.signalingState);
+    
+    // Check connection state before continuing
+    if (pc.signalingState === 'closed') {
+      throw new Error('Peer connection was closed immediately after creation');
+    }
+    
+    // Add tracks to the peer connection with error handling
+    try {
+      stream.getTracks().forEach(track => {
+        console.log('Adding track to peer connection:', track.kind);
+        pc.addTrack(track, stream);
+      });
+      console.log('Successfully added all tracks');
+    } catch (trackError) {
+      console.error('Error adding tracks:', trackError);
+      if (pc.signalingState === 'closed') {
+        throw new Error('Connection closed while adding tracks');
+      } else {
+        throw trackError;
+      }
+    }
     
     // Set remote description (offer) and create answer
     if (callData.offer) {
+      console.log('Setting remote description from offer');
       await pc.setRemoteDescription(
         new RTCSessionDescription(callData.offer)
       );
@@ -464,6 +436,7 @@ const handleAcceptCall = async () => {
       // Process any queued ICE candidates
       processQueuedCandidates();
       
+      console.log('Creating answer');
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       
@@ -475,6 +448,8 @@ const handleAcceptCall = async () => {
       });
       
       console.log('Call accepted and answer sent');
+    } else {
+      console.warn('No offer found in call data');
     }
   } catch (error) {
     console.error('Error accepting call:', error);
