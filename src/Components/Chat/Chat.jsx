@@ -22,14 +22,15 @@ const Chat = ({ setIsAuthenticated }) => {
     callee: null,
     offer: null
   });
-  
+      const BaseUrl='https://vediochatapp-2.onrender.com'
+// const BaseUrl='http://localhost:5000'
   const user = JSON.parse(localStorage.getItem('user'));
   const navigate = useNavigate();
   const messagesEndRef = useRef(null);
   
   // Initialize socket connection
   useEffect(() => {
-    const newSocket = io('https://vediochatapp-2.onrender.com');
+    const newSocket = io(BaseUrl);
     setSocket(newSocket);
     
     // Join personal room
@@ -46,7 +47,7 @@ const Chat = ({ setIsAuthenticated }) => {
   useEffect(() => {
     const fetchUsers = async () => {
       try {
-        const response = await axios.get('https://vediochatapp-2.onrender.com/api/users');
+        const response = await axios.get(BaseUrl+'/api/users');
         // Filter out current user
         const filteredUsers = response.data.filter(u => u.username !== user.username);
         setUsers(filteredUsers);
@@ -127,7 +128,7 @@ const Chat = ({ setIsAuthenticated }) => {
       if (!currentChat) return;
       
       try {
-        const response = await axios.get(`https://vediochatapp-2.onrender.com/api/messages/${user.username}/${currentChat.username}`);
+        const response = await axios.get(`${BaseUrl}/api/messages/${user.username}/${currentChat.username}`);
         setMessages(response.data);
       } catch (error) {
         console.error('Error fetching messages:', error);

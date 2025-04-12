@@ -7,6 +7,7 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [connectionState, setConnectionState] = useState('new');
   const [callStatus, setCallStatus] = useState('connecting');
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
   
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -17,6 +18,7 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
   // Initialize WebRTC
   useEffect(() => {
     console.log('Initializing media and WebRTC connection...');
+    let localMediaStream = null;
     
     const initializeMedia = async () => {
       try {
@@ -30,8 +32,6 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
           return;
         }
         
-       
-        
         console.log('Requesting user media...');
         const stream = await navigator.mediaDevices.getUserMedia({
           video: true,
@@ -40,45 +40,80 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         
         console.log('Local stream obtained successfully');
         setLocalStream(stream);
+        localMediaStream = stream;
         
         if (localVideoRef.current) {
           console.log('Setting local video stream');
           localVideoRef.current.srcObject = stream;
         }
         
-        // Create peer connection
+        // Create peer connection with improved ICE servers
         const configuration = {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
-            // Add a TURN server for better connectivity through NATs
+            { urls: 'stun:stun2.l.google.com:19302' },
+            // More reliable TURN servers
             {
-              urls: 'turn:numb.viagenie.ca',
-              credential: 'muazkh',
-              username: 'webrtc@live.com'
+              urls: 'turn:openrelay.metered.ca:80',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            },
+            {
+              urls: 'turn:openrelay.metered.ca:443',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
             }
-          ]
+          ],
+          iceCandidatePoolSize: 10
         };
         
-        console.log('Creating RTCPeerConnection with config:', configuration);
+        console.log('Creating RTCPeerConnection with config:', JSON.stringify(configuration));
         const peerConnection = new RTCPeerConnection(configuration);
         peerConnectionRef.current = peerConnection;
+        
+        // Set up debugging
+        peerConnection.onicegatheringstatechange = (e) => {
+          console.log('ICE gathering state: ', peerConnection.iceGatheringState);
+        };
         
         // Monitor connection state changes
         peerConnection.onconnectionstatechange = (event) => {
           console.log('Connection state changed:', peerConnection.connectionState);
           setConnectionState(peerConnection.connectionState);
           
-          if (peerConnection.connectionState === 'connected') {
-            setCallStatus('connected');
-          } else if (peerConnection.connectionState === 'failed' || 
-                    peerConnection.connectionState === 'disconnected') {
-            setCallStatus('failed');
+          switch (peerConnection.connectionState) {
+            case 'connected':
+              setCallStatus('connected');
+              console.log('Peer connection successful!');
+              break;
+            case 'disconnected':
+              console.log('Peer disconnected');
+              setCallStatus('disconnected');
+              break;
+            case 'failed':
+              console.error('Peer connection failed');
+              setCallStatus('failed');
+              if (reconnectAttempts < 2) {
+                console.log('Attempting to reconnect...');
+                setReconnectAttempts(prev => prev + 1);
+                // Could implement reconnection logic here
+              }
+              break;
+            case 'closed':
+              console.log('Peer connection closed');
+              setCallStatus('ended');
+              break;
           }
         };
         
         peerConnection.oniceconnectionstatechange = (event) => {
           console.log('ICE connection state:', peerConnection.iceConnectionState);
+          
+          if (peerConnection.iceConnectionState === 'failed') {
+            console.log('ICE failure, attempting to restart ICE');
+            peerConnection.restartIce();
+          }
         };
         
         // Add local stream to peer connection
@@ -105,45 +140,63 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         // Handle remote stream
         peerConnection.ontrack = (event) => {
           console.log('Received remote track:', event.track.kind);
-          setRemoteStream(event.streams[0]);
-          
-          if (remoteVideoRef.current) {
-            console.log('Setting remote video stream');
-            remoteVideoRef.current.srcObject = event.streams[0];
+          if (event.streams && event.streams[0]) {
+            console.log('Setting remote stream');
+            setRemoteStream(event.streams[0]);
+            
+            if (remoteVideoRef.current) {
+              console.log('Setting remote video stream');
+              remoteVideoRef.current.srcObject = event.streams[0];
+            }
+          } else {
+            console.warn('No remote stream available in ontrack event');
           }
         };
         
         // Initiate call if initiator
         if (callData.isInitiator) {
           console.log('I am the initiator, creating offer');
-          const offer = await peerConnection.createOffer();
-          console.log('Setting local description (offer)');
-          await peerConnection.setLocalDescription(offer);
-          
-          console.log('Sending call offer to:', otherUser);
-          socket.emit('call-user', {
-            to: otherUser,
-            from: currentUser.username,
-            offer: offer
-          });
+          try {
+            const offer = await peerConnection.createOffer({
+              offerToReceiveAudio: true,
+              offerToReceiveVideo: true
+            });
+            console.log('Setting local description (offer):', offer);
+            await peerConnection.setLocalDescription(offer);
+            
+            console.log('Sending call offer to:', otherUser);
+            socket.emit('call-user', {
+              to: otherUser,
+              from: currentUser.username,
+              offer: offer
+            });
+          } catch (error) {
+            console.error('Error creating offer:', error);
+            setCallStatus('error');
+          }
         }
         // Answer call if receiver
         else if (callData.offer) {
           console.log('I am the receiver, processing offer');
-          console.log('Setting remote description (offer)');
-          await peerConnection.setRemoteDescription(new RTCSessionDescription(callData.offer));
-          
-          console.log('Creating answer');
-          const answer = await peerConnection.createAnswer();
-          console.log('Setting local description (answer)');
-          await peerConnection.setLocalDescription(answer);
-          
-          console.log('Sending answer to:', otherUser);
-          socket.emit('make-answer', {
-            to: otherUser,
-            from: currentUser.username,
-            answer: answer
-          });
+          try {
+            console.log('Setting remote description (offer):', callData.offer);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(callData.offer));
+            
+            console.log('Creating answer');
+            const answer = await peerConnection.createAnswer();
+            console.log('Setting local description (answer):', answer);
+            await peerConnection.setLocalDescription(answer);
+            
+            console.log('Sending answer to:', otherUser);
+            socket.emit('make-answer', {
+              to: otherUser,
+              from: currentUser.username,
+              answer: answer
+            });
+          } catch (error) {
+            console.error('Error creating answer:', error);
+            setCallStatus('error');
+          }
         }
       } catch (error) {
         console.error('Error accessing media devices:', error);
@@ -168,8 +221,8 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
     return () => {
       console.log('Cleaning up media and connection');
       // Clean up media streams
-      if (localStream) {
-        localStream.getTracks().forEach(track => {
+      if (localMediaStream) {
+        localMediaStream.getTracks().forEach(track => {
           console.log(`Stopping ${track.kind} track`);
           track.stop();
         });
@@ -180,7 +233,7 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         peerConnectionRef.current.close();
       }
     };
-  }, [callData.isInitiator, callData.offer, currentUser.username, otherUser, socket]);
+  }, [callData.isInitiator, callData.offer, currentUser.username, otherUser, socket, reconnectAttempts]);
   
   // Handle incoming ICE candidates
   useEffect(() => {
@@ -189,10 +242,15 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
     const handleIceCandidate = async (data) => {
       try {
         if (data.from === otherUser) {
-          console.log('Received ICE candidate from:', data.from);
-          const candidate = new RTCIceCandidate(data.candidate);
-          await peerConnectionRef.current.addIceCandidate(candidate);
-          console.log('Successfully added ICE candidate');
+          console.log('Received ICE candidate from:', data.from, data.candidate);
+          if (peerConnectionRef.current.remoteDescription) {
+            const candidate = new RTCIceCandidate(data.candidate);
+            await peerConnectionRef.current.addIceCandidate(candidate);
+            console.log('Successfully added ICE candidate');
+          } else {
+            console.warn('Received ICE candidate before remote description was set');
+            // Could store candidates and apply later
+          }
         }
       } catch (error) {
         console.error('Error adding ICE candidate:', error);
@@ -215,10 +273,11 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
     const handleAnswer = async (data) => {
       try {
         if (data.from === otherUser) {
-          console.log('Received answer from:', data.from);
+          console.log('Received answer from:', data.from, data.answer);
           const sessionDesc = new RTCSessionDescription(data.answer);
           console.log('Setting remote description (answer)');
           await peerConnectionRef.current.setRemoteDescription(sessionDesc);
+          console.log('Remote description set successfully');
         }
       } catch (error) {
         console.error('Error setting remote description:', error);
@@ -233,6 +292,37 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
       socket.off('answer-made', handleAnswer);
     };
   }, [callData.isInitiator, otherUser, socket]);
+  
+  // Handle call rejection and ending
+  useEffect(() => {
+    if (!socket) return;
+    
+    const handleCallRejected = (data) => {
+      if (data.from === otherUser) {
+        console.log('Call rejected by:', data.from);
+        setCallStatus('rejected');
+        onEndCall(); // End call on our side
+      }
+    };
+    
+    const handleCallEnded = (data) => {
+      if (data.from === otherUser) {
+        console.log('Call ended by:', data.from);
+        setCallStatus('ended');
+        onEndCall(); // End call on our side
+      }
+    };
+    
+    console.log('Setting up call rejection and ended listeners');
+    socket.on('call-rejected', handleCallRejected);
+    socket.on('call-ended', handleCallEnded);
+    
+    return () => {
+      console.log('Removing call rejection and ended listeners');
+      socket.off('call-rejected', handleCallRejected);
+      socket.off('call-ended', handleCallEnded);
+    };
+  }, [otherUser, socket, onEndCall]);
   
   const toggleMute = () => {
     if (localStream) {
@@ -254,6 +344,15 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
     }
   };
   
+  const handleEndCall = () => {
+    console.log(`Ending call with ${otherUser}`);
+    socket.emit('end-call', {
+      to: otherUser,
+      from: currentUser.username
+    });
+    onEndCall();
+  };
+  
   return (
     <div className="flex-grow flex flex-col bg-gray-900 text-white">
       <div className="p-4 border-b border-gray-700 flex items-center justify-between">
@@ -268,7 +367,10 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         <div className="text-sm text-gray-400">
           {callStatus === 'connecting' && 'Connecting...'}
           {callStatus === 'connected' && 'Connected'}
+          {callStatus === 'disconnected' && 'Disconnected'}
           {callStatus === 'failed' && 'Connection failed'}
+          {callStatus === 'rejected' && 'Call rejected'}
+          {callStatus === 'ended' && 'Call ended'}
           {callStatus === 'error' && 'Error'}
         </div>
       </div>
@@ -294,16 +396,19 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         </div>
         
         {/* Connection status overlay */}
-        {!remoteStream && (
+        {(!remoteStream || callStatus === 'failed' || callStatus === 'error') && (
           <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70 text-white">
             <div className="text-center">
               <div className="text-xl font-medium mb-2">
                 {callStatus === 'connecting' && 'Connecting to remote user...'}
-                {callStatus === 'failed' && 'Connection failed'}
+                {callStatus === 'disconnected' && 'Connection lost. Trying to reconnect...'}
+                {callStatus === 'failed' && 'Connection failed. Please try again.'}
+                {callStatus === 'rejected' && 'Call was rejected'}
+                {callStatus === 'ended' && 'Call ended'}
                 {callStatus === 'error' && 'Error accessing camera/microphone'}
               </div>
               <div className="text-gray-400">
-                {connectionState !== 'connected' && 'Waiting for remote video...'}
+                {connectionState !== 'connected' && callStatus === 'connecting' && 'Waiting for remote video...'}
               </div>
             </div>
           </div>
@@ -344,7 +449,7 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         </button>
         
         <button
-          onClick={onEndCall}
+          onClick={handleEndCall}
           className="p-3 bg-red-600 rounded-full hover:bg-red-700 focus:outline-none"
         >
           <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">

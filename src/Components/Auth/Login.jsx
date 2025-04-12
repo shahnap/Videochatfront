@@ -1,6 +1,6 @@
 
 // File: src/components/Auth/Login.js
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
@@ -12,7 +12,8 @@ const Login = ({ setIsAuthenticated }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  
+  const BaseUrl='https://vediochatapp-2.onrender.com'
+// const BaseUrl='http://localhost:5000'
   const handleChange = (e) => {
     setFormData({
       ...formData,
@@ -20,13 +21,20 @@ const Login = ({ setIsAuthenticated }) => {
     });
   };
   
+  useEffect(() => {
+    const data = axios.get(BaseUrl+'/ping', formData).then((res)=>{
+      console.log("resss",data);
+      
+    })
+  }, [])
+  
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
     
     try {
-      const response = await axios.post('https://vediochatapp-2.onrender.com/api/login', formData);
+      const response = await axios.post(BaseUrl+'/api/login', formData);
       
       localStorage.setItem('token', response.data.token);
       localStorage.setItem('user', JSON.stringify(response.data.user));

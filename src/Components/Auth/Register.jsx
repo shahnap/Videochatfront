@@ -15,7 +15,8 @@ const Register = ({ setIsAuthenticated }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  
+    const BaseUrl='https://vediochatapp-2.onrender.com'
+// const BaseUrl='http://localhost:5000'
   const handleChange = (e) => {
     setFormData({
       ...formData,
@@ -35,7 +36,7 @@ const Register = ({ setIsAuthenticated }) => {
     }
     
     try {
-      const response = await axios.post('https://vediochatapp-2.onrender.com/api/register', {
+      const response = await axios.post(BaseUrl+'/api/register', {
         username: formData.username,
         displayName: formData.displayName,
         password: formData.password

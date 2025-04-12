@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import io from 'socket.io-client';
+const BaseUrl='https://vediochatapp-2.onrender.com'
+// const BaseUrl='http://localhost:5000'
 
-const socket = io('https://vediochatapp-2.onrender.com'); // Replace with your server URL
+const socket = io(BaseUrl); // Replace with your server URL
 
 const App = () => {
   const [messages, setMessages] = useState([]);
