@@ -15,9 +15,8 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
 
   const otherUser = callData.isInitiator ? callData.callee : callData.caller;
   useEffect(() => {
-    if (!peerConnectionRef.current) return;
-  
     const pc = peerConnectionRef.current;
+    if (!pc) return;
   
     const handleStateChange = () => {
       console.log('Connection state:', pc.connectionState);
@@ -34,10 +33,12 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
   
     pc.addEventListener('connectionstatechange', handleStateChange);
     pc.addEventListener('iceconnectionstatechange', handleStateChange);
+    pc.addEventListener('signalingstatechange', handleStateChange);
   
     return () => {
       pc.removeEventListener('connectionstatechange', handleStateChange);
       pc.removeEventListener('iceconnectionstatechange', handleStateChange);
+      pc.removeEventListener('signalingstatechange', handleStateChange);
     };
   }, []);
   // Initialize media and WebRTC connection
@@ -260,6 +261,7 @@ peerConnection.onsignalingstatechange = () => {
 
   // Handle incoming answers
 // Handle incoming answers
+// Add this to handle incoming answers
 useEffect(() => {
   if (!socket || !peerConnectionRef.current || !callData.isInitiator) return;
 
@@ -297,6 +299,25 @@ useEffect(() => {
 }, [socket, otherUser, callData.isInitiator]);
 // Add this to your component state
 const [connectionTimeout, setConnectionTimeout] = useState(false);
+// Increase timeout to 60 seconds
+const [timeoutId, setTimeoutId] = useState(null);
+
+useEffect(() => {
+  if (!showAcceptReject) {
+    const id = setTimeout(() => {
+      if (callStatus === 'connecting') {
+        console.log('Connection timeout - restarting ICE');
+        restartIce();
+      }
+    }, 60000); // 60 seconds
+    
+    setTimeoutId(id);
+    
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }
+}, [showAcceptReject, callStatus]);
 
 // Modify your initialization useEffect
 useEffect(() => {
@@ -437,17 +458,71 @@ const handleAcceptCall = async () => {
   setCallStatus('connecting');
   
   try {
-    // Get user media if not already done
+    // 1. Get user media if not already done
     if (!localStream) {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: true, 
+        audio: true 
+      });
       setLocalStream(stream);
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
       }
     }
+    const setupPeerConnectionHandlers = () => {
+      const pc = peerConnectionRef.current;
+    
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('New ICE candidate:', event.candidate.candidate);
+          if (pc.remoteDescription) {
+            // Send immediately if we have remote description
+            socket.emit('ice-candidate', {
+              to: otherUser,
+              from: currentUser.username,
+              candidate: event.candidate
+            });
+          } else {
+            // Queue candidates if no remote description yet
+            console.log('Queuing ICE candidate');
+            iceCandidatesRef.current.push(event.candidate);
+          }
+        } else {
+          console.log('ICE gathering complete');
+        }
+      };
+    
+      pc.ontrack = (event) => {
+        console.log('Received remote track:', event.track.kind);
+        if (!remoteStream) {
+          const newStream = new MediaStream();
+          newStream.addTrack(event.track);
+          setRemoteStream(newStream);
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = newStream;
+            remoteVideoRef.current.play().catch(e => {
+              console.error('Error playing remote video:', e);
+            });
+          }
+        }
+      };
+    };
+    // 2. Create peer connection if not exists
+    if (!peerConnectionRef.current) {
+      const configuration = {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          // ... your other ICE servers ...
+        ]
+      };
+      peerConnectionRef.current = new RTCPeerConnection(configuration);
+      
+      // Setup all event handlers here...
+      setupPeerConnectionHandlers();
+    }
 
-    // Create answer after setting remote description
-    if (peerConnectionRef.current && callData.offer) {
+    // 3. Set remote description and create answer
+    if (callData.offer) {
       await peerConnectionRef.current.setRemoteDescription(
         new RTCSessionDescription(callData.offer)
       );
@@ -455,7 +530,7 @@ const handleAcceptCall = async () => {
       const answer = await peerConnectionRef.current.createAnswer();
       await peerConnectionRef.current.setLocalDescription(answer);
       
-      // Send answer to caller
+      // 4. Send answer to caller
       socket.emit('make-answer', {
         to: callData.caller,
         from: currentUser.username,
