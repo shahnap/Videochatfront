@@ -195,45 +195,44 @@ useEffect(() => {
           }
         };
         
-        // Monitor connection state changes
-        peerConnection.onconnectionstatechange = (event) => {
-          console.log('Connection state changed:', peerConnection.connectionState);
-          setConnectionState(peerConnection.connectionState);
-          
-          switch (peerConnection.connectionState) {
-            case 'connected':
-              setCallStatus('connected');
-              console.log('Peer connection successful!');
-              // Clear connection timeout timer
-              if (connectionTimerRef.current) {
-                clearTimeout(connectionTimerRef.current);
-              }
-              break;
-            case 'disconnected':
-              console.log('Peer disconnected');
-              setCallStatus('disconnected');
-              break;
-            case 'failed':
-              console.error('Peer connection failed');
-              setCallStatus('failed');
-              if (reconnectAttempts < 2) {
-                console.log('Attempting to reconnect...');
-                setReconnectAttempts(prev => prev + 1);
-                // Implement reconnection logic
-                try {
-                  console.log('Restarting ICE');
-                  peerConnection.restartIce();
-                } catch (e) {
-                  console.error('Failed to restart ICE:', e);
-                }
-              }
-              break;
-            case 'closed':
-              console.log('Peer connection closed');
-              setCallStatus('ended');
-              break;
-          }
-        };
+       // Add this to your peer connection setup
+peerConnection.onconnectionstatechange = () => {
+  console.log('Connection state:', peerConnection.connectionState);
+  switch(peerConnection.connectionState) {
+    case 'connected':
+      // The connection has become fully connected
+      console.log('Fully connected!');
+      break;
+    case 'disconnected':
+    case 'failed':
+      // One or more transports has terminated unexpectedly
+      console.warn('Connection failed, attempting restart...');
+      restartIce();
+      break;
+    case 'closed':
+      // The connection has been closed
+      console.log('Connection closed');
+      break;
+  }
+};
+
+const restartIce = async () => {
+  if (!peerConnectionRef.current) return;
+  
+  try {
+    // Create a new offer with iceRestart flag
+    const offer = await peerConnectionRef.current.createOffer({ iceRestart: true });
+    await peerConnectionRef.current.setLocalDescription(offer);
+    
+    socket.emit('call-user', {
+      to: otherUser,
+      from: currentUser.username,
+      offer: offer
+    });
+  } catch (err) {
+    console.error('Error restarting ICE:', err);
+  }
+};
         
         peerConnection.oniceconnectionstatechange = (event) => {
           console.log('ICE connection state:', peerConnection.iceConnectionState);
@@ -263,24 +262,22 @@ useEffect(() => {
         });
         
         // Handle ICE candidates with detailed logging
-        peerConnection.onicecandidate = (event) => {
-          if (event.candidate) {
-            console.log('Generated ICE candidate:', event.candidate.candidate.substring(0, 50) + '...');
-            console.log('Sending ICE candidate to:', otherUser);
-            
-            // Store ICE candidate for potential debugging
-            iceCandidatesRef.current.push(event.candidate);
-            
-            socket.emit('ice-candidate', {
-              to: otherUser,
-              from: currentUser.username,
-              candidate: event.candidate
-            });
-          } else {
-            console.log('ICE gathering complete (null candidate)');
-            setIceGatheringComplete(true);
-          }
-        };
+       // Modify your ICE candidate handling to check for remote description first
+peerConnection.onicecandidate = (event) => {
+  if (event.candidate) {
+    // Only send candidates if we have a remote description
+    if (peerConnection.remoteDescription) {
+      socket.emit('ice-candidate', {
+        to: otherUser,
+        from: currentUser.username,
+        candidate: event.candidate
+      });
+    } else {
+      // Queue candidates if remote description isn't set yet
+      iceCandidatesRef.current.push(event.candidate);
+    }
+  }
+};
         
         // Handle remote stream with more detailed logging
         // peerConnection.ontrack = (event) => {
@@ -312,33 +309,36 @@ useEffect(() => {
         //   }
         // };
         // Add this to your ontrack handler
+// Replace your ontrack handler with this more robust version
 peerConnection.ontrack = (event) => {
-  console.log('Received remote track:', event.track.kind, 'enabled:', event.track.enabled, 'muted:', event.track.muted);
+  console.log('Received remote track:', event.track.kind);
   
-  // Debug track readiness
-  event.track.onmute = () => console.log('Remote track muted');
-  event.track.onunmute = () => console.log('Remote track unmuted');
-  event.track.onended = () => console.log('Remote track ended');
-  
-  if (event.streams && event.streams[0]) {
-    console.log('Setting remote stream with tracks:', 
-      event.streams[0].getTracks().map(t => `${t.kind}:${t.readyState}`).join(', '));
-    
-    // Focus on this part - inspect what's happening with the stream
-    setRemoteStream(event.streams[0]);
-    
+  if (!event.streams || event.streams.length === 0) {
+    console.warn('No streams in track event, creating new stream');
+    const newStream = new MediaStream();
+    newStream.addTrack(event.track);
+    setRemoteStream(newStream);
     if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = event.streams[0];
-      
-      // Force play attempt with detailed error logging
-      remoteVideoRef.current.play().catch(e => {
-        console.error('Error playing remote video:', e);
-        // If it's an autoplay policy issue:
-        if (e.name === 'NotAllowedError') {
-          alert('Autoplay blocked. Please interact with the page to enable video.');
-        }
-      });
+      remoteVideoRef.current.srcObject = newStream;
     }
+    return;
+  }
+
+  // Handle case where streams are present
+  const stream = event.streams[0];
+  setRemoteStream(stream);
+  
+  if (remoteVideoRef.current) {
+    remoteVideoRef.current.srcObject = stream;
+    
+    // Force play with error handling
+    remoteVideoRef.current.play().catch(err => {
+      console.error('Failed to play remote video:', err);
+      // Handle autoplay policy issues
+      if (err.name === 'NotAllowedError') {
+        alert('Please click anywhere on the page to allow video playback');
+      }
+    });
   }
 };
         
@@ -347,33 +347,23 @@ peerConnection.ontrack = (event) => {
           console.log('I am the initiator, creating offer');
           try {
             // Add this function before setting local/remote descriptions
-function fixSdp(sdp) {
-  // Force H.264 as the preferred codec if available
-  let modifiedSdp = sdp;
+// Add this function to modify SDP for better compatibility
+function optimizeSdp(sdp) {
+  // Prioritize H.264 codec
+  sdp = sdp.replace(/a=rtpmap:(\d+) VP8\/90000/g, 'a=rtpmap:$1 H264/90000');
   
-  // Ensure video bandwidth is prioritized
-  modifiedSdp = modifiedSdp.replace(/(m=video.*\r\n)/g, 
-    '$1b=AS:2000\r\n');
+  // Add bandwidth settings
+  sdp = sdp.replace(/a=mid:video\r\n/g, 'a=mid:video\r\nb=AS:2000\r\n');
   
-  // Ensure ICE restart is allowed
-  modifiedSdp = modifiedSdp.replace(/(a=ice-options:.*)\r\n/g, 
-    '$1 ice-lite\r\n');
-  
-  return modifiedSdp;
+  return sdp;
 }
 
-// Then when you create offers/answers:
-const offer = await peerConnection.createOffer({
-  offerToReceiveAudio: true,
-  offerToReceiveVideo: true,
-  iceRestart: reconnectAttempts > 0
-});
-
-// Fix the SDP before setting local description
-offer.sdp = fixSdp(offer.sdp);
+// Then modify your offer/answer creation:
+const offer = await peerConnection.createOffer();
+offer.sdp = optimizeSdp(offer.sdp);
 await peerConnection.setLocalDescription(offer);
-            console.log('Setting local description (offer):', offer.type);
-            await peerConnection.setLocalDescription(offer);
+
+
             
             console.log('Sending call offer to:', otherUser);
             socket.emit('call-user', {
