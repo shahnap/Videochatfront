@@ -41,7 +41,6 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
       ],
       iceCandidatePoolSize: 10
     };
-    // dsfsdf
 
     const pc = new RTCPeerConnection(configuration);
     peerConnectionRef.current = pc;
@@ -117,6 +116,12 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
   // Get user media and initialize call
   const initializeMedia = async () => {
     try {
+      // First create peer connection before requesting media
+      const pc = initializePeerConnection();
+      if (!pc) {
+        throw new Error('Failed to create peer connection');
+      }
+
       // Get user media
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
@@ -128,20 +133,15 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         localVideoRef.current.srcObject = stream;
       }
 
-      // Create peer connection if it doesn't exist
-      if (!peerConnectionRef.current) {
-        initializePeerConnection();
-      }
-
       // Add local tracks to the connection
       stream.getTracks().forEach(track => {
-        peerConnectionRef.current.addTrack(track, stream);
+        pc.addTrack(track, stream);
       });
 
       // If initiator, create and send offer
       if (callData.isInitiator) {
-        const offer = await peerConnectionRef.current.createOffer();
-        await peerConnectionRef.current.setLocalDescription(offer);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
         
         socket.emit('call-user', {
           to: otherUser,
@@ -347,24 +347,20 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
   }, [socket, otherUser, onEndCall]);
 
   // Handle accepting call (for receiver)
- // Handle accepting call (for receiver)
-const handleAcceptCall = async () => {
-  setShowAcceptReject(false);
-  setCallStatus('connecting');
-  
-  try {
-    // Initialize peer connection FIRST - before trying to add tracks
-    if (!peerConnectionRef.current) {
-      initializePeerConnection();
-    }
+  const handleAcceptCall = async () => {
+    setShowAcceptReject(false);
+    setCallStatus('connecting');
     
-    // IMPORTANT: Make sure peer connection exists before continuing
-    if (!peerConnectionRef.current) {
-      throw new Error('Failed to create peer connection');
-    }
-    
-    // Get user media if not already obtained
-    if (!localStream) {
+    try {
+      // Initialize peer connection first
+      const pc = initializePeerConnection();
+      
+      // Ensure peer connection was successfully created
+      if (!pc) {
+        throw new Error('Failed to create peer connection');
+      }
+      
+      // Get user media
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: true, 
         audio: true 
@@ -375,43 +371,37 @@ const handleAcceptCall = async () => {
         localVideoRef.current.srcObject = stream;
       }
       
-      // Now that we're sure peerConnectionRef.current exists, add tracks
+      // Add tracks to the peer connection
       stream.getTracks().forEach(track => {
-        peerConnectionRef.current.addTrack(track, stream);
+        pc.addTrack(track, stream);
       });
-    } else {
-      // Add tracks from existing stream
-      localStream.getTracks().forEach(track => {
-        peerConnectionRef.current.addTrack(track, localStream);
-      });
+      
+      // Set remote description (offer) and create answer
+      if (callData.offer) {
+        await pc.setRemoteDescription(
+          new RTCSessionDescription(callData.offer)
+        );
+        
+        // Process any queued ICE candidates
+        processQueuedCandidates();
+        
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        
+        // Send answer to caller
+        socket.emit('make-answer', {
+          to: callData.caller,
+          from: currentUser.username,
+          answer: answer
+        });
+        
+        console.log('Call accepted and answer sent');
+      }
+    } catch (error) {
+      console.error('Error accepting call:', error);
+      setCallStatus('error');
     }
-    
-    // Set remote description (offer) and create answer
-    if (callData.offer) {
-      await peerConnectionRef.current.setRemoteDescription(
-        new RTCSessionDescription(callData.offer)
-      );
-      
-      // Process any queued ICE candidates
-      processQueuedCandidates();
-      
-      const answer = await peerConnectionRef.current.createAnswer();
-      await peerConnectionRef.current.setLocalDescription(answer);
-      
-      // Send answer to caller
-      socket.emit('make-answer', {
-        to: callData.caller,
-        from: currentUser.username,
-        answer: answer
-      });
-      
-      console.log('Call accepted and answer sent');
-    }
-  } catch (error) {
-    console.error('Error accepting call:', error);
-    setCallStatus('error');
-  }
-};
+  };
 
   // Handle rejecting call
   const handleRejectCall = () => {
