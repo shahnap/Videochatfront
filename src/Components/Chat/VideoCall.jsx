@@ -63,25 +63,35 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         // Handle remote tracks
         peerConnection.ontrack = (event) => {
           console.log('Received remote track:', event.track.kind);
-          const remoteStream = event.streams[0];
-          setRemoteStream(remoteStream);
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = remoteStream;
-            remoteVideoRef.current.play().catch(e => {
-              console.error('Error playing remote video:', e);
-            });
+          if (!remoteStream) {
+            const newRemoteStream = new MediaStream();
+            newRemoteStream.addTrack(event.track);
+            setRemoteStream(newRemoteStream);
+            if (remoteVideoRef.current) {
+              remoteVideoRef.current.srcObject = newRemoteStream;
+              remoteVideoRef.current.play().catch(e => {
+                console.error('Error playing remote video:', e);
+              });
+            }
+            setCallStatus('connected');
+          } else {
+            remoteStream.addTrack(event.track);
           }
-          setCallStatus('connected');
         };
 
         // Handle ICE candidates
         peerConnection.onicecandidate = (event) => {
           if (event.candidate) {
-            socket.emit('ice-candidate', {
-              to: otherUser,
-              from: currentUser.username,
-              candidate: event.candidate
-            });
+            // Only send candidates if we have a remote description
+            if (peerConnection.remoteDescription) {
+              socket.emit('ice-candidate', {
+                to: otherUser,
+                from: currentUser.username,
+                candidate: event.candidate
+              });
+            } else {
+              iceCandidatesRef.current.push(event.candidate);
+            }
           }
         };
 
@@ -104,9 +114,25 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
           });
         }
 
+        // Process any queued ICE candidates
+        processQueuedCandidates();
+
       } catch (error) {
         console.error('Error initializing call:', error);
         setCallStatus('error');
+      }
+    };
+
+    const processQueuedCandidates = async () => {
+      if (!peerConnectionRef.current) return;
+      
+      while (iceCandidatesRef.current.length > 0 && peerConnectionRef.current.remoteDescription) {
+        const candidate = iceCandidatesRef.current.shift();
+        try {
+          await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (error) {
+          console.error('Error adding queued ICE candidate:', error);
+        }
       }
     };
 
@@ -151,6 +177,38 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
 
     return () => {
       socket.off('call-made', handleCallOffer);
+    };
+  }, [socket, otherUser, callData.isInitiator]);
+
+  // Handle incoming answers
+  useEffect(() => {
+    if (!socket || !peerConnectionRef.current || !callData.isInitiator) return;
+
+    const handleAnswer = async (data) => {
+      if (data.from === otherUser) {
+        try {
+          await peerConnectionRef.current.setRemoteDescription(
+            new RTCSessionDescription(data.answer)
+          );
+          // Process any queued ICE candidates now that we have remote description
+          while (iceCandidatesRef.current.length > 0) {
+            const candidate = iceCandidatesRef.current.shift();
+            try {
+              await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (error) {
+              console.error('Error adding queued ICE candidate:', error);
+            }
+          }
+        } catch (error) {
+          console.error('Error handling answer:', error);
+        }
+      }
+    };
+
+    socket.on('answer-made', handleAnswer);
+
+    return () => {
+      socket.off('answer-made', handleAnswer);
     };
   }, [socket, otherUser, callData.isInitiator]);
 
