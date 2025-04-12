@@ -41,6 +41,7 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
       ],
       iceCandidatePoolSize: 10
     };
+    // dsfsdf
 
     const pc = new RTCPeerConnection(configuration);
     peerConnectionRef.current = pc;
