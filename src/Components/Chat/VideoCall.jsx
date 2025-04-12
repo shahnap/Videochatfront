@@ -409,69 +409,78 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
   }, [socket, otherUser, onEndCall]);
 
   // Handle accepting call (for receiver)
-  const handleAcceptCall = async () => {
-    setShowAcceptReject(false);
-    setCallStatus('connecting');
+// Handle accepting call (for receiver)
+const handleAcceptCall = async () => {
+  setShowAcceptReject(false);
+  setCallStatus('connecting');
+  
+  try {
+    // Close any existing peer connection first
+    closePeerConnection();
     
-    try {
-      // Close any existing peer connection first
-      closePeerConnection();
-      
-      // Initialize a new peer connection
-      const pc = initializePeerConnection();
-      
-      // Ensure peer connection was successfully created
-      if (!pc) {
-        throw new Error('Failed to create peer connection');
-      }
-      
-      // Get user media
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: true, 
-        audio: true 
-      });
-      
-      setLocalStream(stream);
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-      }
-      
-      // Check connection state before adding tracks
-      if (pc.signalingState === 'closed') {
-        throw new Error('Cannot add tracks to closed connection');
-      }
-      
-      // Add tracks to the peer connection
-      stream.getTracks().forEach(track => {
-        pc.addTrack(track, stream);
-      });
-      
-      // Set remote description (offer) and create answer
-      if (callData.offer) {
-        await pc.setRemoteDescription(
-          new RTCSessionDescription(callData.offer)
-        );
-        
-        // Process any queued ICE candidates
-        processQueuedCandidates();
-        
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        
-        // Send answer to caller
-        socket.emit('make-answer', {
-          to: callData.caller,
-          from: currentUser.username,
-          answer: answer
-        });
-        
-        console.log('Call accepted and answer sent');
-      }
-    } catch (error) {
-      console.error('Error accepting call:', error);
-      setCallStatus('error');
+    // Initialize a new peer connection
+    const pc = initializePeerConnection();
+    
+    // Ensure peer connection was successfully created
+    if (!pc) {
+      throw new Error('Failed to create peer connection');
     }
-  };
+    
+    // Add a small delay to ensure the peer connection is fully initialized
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // Check connection state before continuing
+    if (pc.signalingState === 'closed') {
+      throw new Error('Peer connection was closed during initialization');
+    }
+    
+    // Get user media
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: true, 
+      audio: true 
+    });
+    
+    setLocalStream(stream);
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = stream;
+    }
+    
+    // Double check connection state before adding tracks
+    if (pc.signalingState === 'closed') {
+      throw new Error('Cannot add tracks to closed connection');
+    }
+    
+    // Add tracks to the peer connection
+    stream.getTracks().forEach(track => {
+      pc.addTrack(track, stream);
+    });
+    
+    // Set remote description (offer) and create answer
+    if (callData.offer) {
+      await pc.setRemoteDescription(
+        new RTCSessionDescription(callData.offer)
+      );
+      
+      // Process any queued ICE candidates
+      processQueuedCandidates();
+      
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      
+      // Send answer to caller
+      socket.emit('make-answer', {
+        to: callData.caller,
+        from: currentUser.username,
+        answer: answer
+      });
+      
+      console.log('Call accepted and answer sent');
+    }
+  } catch (error) {
+    console.error('Error accepting call:', error);
+    setCallStatus('error');
+  }
+};
 
   // Handle rejecting call
   const handleRejectCall = () => {
