@@ -61,29 +61,73 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         });
 
         // Handle remote tracks
-        peerConnection.ontrack = (event) => {
-          console.log('Received remote track:', event.track.kind);
-          if (!remoteStream) {
-            const newRemoteStream = new MediaStream();
-            newRemoteStream.addTrack(event.track);
-            setRemoteStream(newRemoteStream);
-            if (remoteVideoRef.current) {
-              remoteVideoRef.current.srcObject = newRemoteStream;
-              remoteVideoRef.current.play().catch(e => {
-                console.error('Error playing remote video:', e);
-              });
-            }
-            setCallStatus('connected');
-          } else {
-            remoteStream.addTrack(event.track);
-          }
-        };
+       // In both components
+peerConnection.ontrack = (event) => {
+  console.log('Received remote track:', event.track.kind);
+  
+  if (!event.streams || event.streams.length === 0) {
+    console.log('Creating new remote stream');
+    const newStream = new MediaStream();
+    newStream.addTrack(event.track);
+    setRemoteStream(newStream);
+    
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = newStream;
+      remoteVideoRef.current.play().catch(e => {
+        console.error('Error playing remote video:', e);
+      });
+    }
+  } else {
+    console.log('Adding track to existing remote stream');
+    const [stream] = event.streams;
+    if (!remoteStream) {
+      setRemoteStream(stream);
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = stream;
+        remoteVideoRef.current.play().catch(e => {
+          console.error('Error playing remote video:', e);
+        });
+      }
+    } else {
+      // Add track to existing stream if not already present
+      if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
+        remoteStream.addTrack(event.track);
+      }
+    }
+  }
+};
+// In both components
+useEffect(() => {
+  if (!peerConnectionRef.current) return;
 
-        // Handle ICE candidates
-       // Modify your ICE candidate handler
+  const pc = peerConnectionRef.current;
+
+  const handleStateChange = () => {
+    console.log('Connection state:', pc.connectionState);
+    console.log('ICE connection state:', pc.iceConnectionState);
+    console.log('Signaling state:', pc.signalingState);
+    
+    if (pc.iceConnectionState === 'connected') {
+      setCallStatus('connected');
+    } else if (pc.iceConnectionState === 'failed') {
+      console.log('ICE connection failed - restarting');
+      restartIce();
+    }
+  };
+
+  pc.addEventListener('connectionstatechange', handleStateChange);
+  pc.addEventListener('iceconnectionstatechange', handleStateChange);
+
+  return () => {
+    pc.removeEventListener('connectionstatechange', handleStateChange);
+    pc.removeEventListener('iceconnectionstatechange', handleStateChange);
+  };
+}, []);
+  // In both components (caller and receiver)
 peerConnection.onicecandidate = (event) => {
   if (event.candidate) {
     console.log('New ICE candidate:', event.candidate.candidate);
+    
     // Send immediately if we have remote description
     if (peerConnection.remoteDescription) {
       socket.emit('ice-candidate', {
@@ -98,9 +142,24 @@ peerConnection.onicecandidate = (event) => {
     }
   } else {
     console.log('ICE gathering complete');
+    // Process any queued candidates now
+    processQueuedCandidates();
   }
 };
 
+const processQueuedCandidates = async () => {
+  while (iceCandidatesRef.current.length > 0 && peerConnectionRef.current.remoteDescription) {
+    const candidate = iceCandidatesRef.current.shift();
+    try {
+      await peerConnectionRef.current.addIceCandidate(
+        new RTCIceCandidate(candidate)
+      );
+      console.log('Added queued ICE candidate');
+    } catch (error) {
+      console.error('Error adding queued ICE candidate:', error);
+    }
+  }
+};
         // Handle connection state changes
         // Add these handlers to your peer connection setup
 peerConnection.oniceconnectionstatechange = () => {
@@ -372,11 +431,44 @@ useEffect(() => {
       setIsVideoOff(!isVideoOff);
     }
   };
+// In the receiver's component (the one who gets the call)
+const handleAcceptCall = async () => {
+  setShowAcceptReject(false);
+  setCallStatus('connecting');
+  
+  try {
+    // Get user media if not already done
+    if (!localStream) {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      setLocalStream(stream);
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+    }
 
-  const handleAcceptCall = () => {
-    setShowAcceptReject(false);
-    setCallStatus('connecting');
-  };
+    // Create answer after setting remote description
+    if (peerConnectionRef.current && callData.offer) {
+      await peerConnectionRef.current.setRemoteDescription(
+        new RTCSessionDescription(callData.offer)
+      );
+      
+      const answer = await peerConnectionRef.current.createAnswer();
+      await peerConnectionRef.current.setLocalDescription(answer);
+      
+      // Send answer to caller
+      socket.emit('make-answer', {
+        to: callData.caller,
+        from: currentUser.username,
+        answer: answer
+      });
+      
+      console.log('Answer sent successfully');
+    }
+  } catch (error) {
+    console.error('Error accepting call:', error);
+    setCallStatus('error');
+  }
+};
 
   const handleRejectCall = () => {
     socket.emit('reject-call', {
