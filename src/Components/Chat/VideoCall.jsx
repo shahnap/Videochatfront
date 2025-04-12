@@ -17,9 +17,15 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
 
   // Initialize WebRTC with improved configuration
   const initializePeerConnection = () => {
+    if (peerConnectionRef.current) {
+      console.log('Peer connection already exists');
+      return peerConnectionRef.current;
+    }
+    console.log('Creating new peer connection');
     // Improved ICE server configuration
     const configuration = {
       iceServers: [
+        
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
@@ -340,60 +346,71 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
   }, [socket, otherUser, onEndCall]);
 
   // Handle accepting call (for receiver)
-  const handleAcceptCall = async () => {
-    setShowAcceptReject(false);
-    setCallStatus('connecting');
-    
-    try {
-      // Initialize peer connection if not already created
-      if (!peerConnectionRef.current) {
-        initializePeerConnection();
-      }
-      
-      // Get user media if not already obtained
-      if (!localStream) {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: true, 
-          audio: true 
-        });
-        
-        setLocalStream(stream);
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
-        
-        // Add local tracks to the peer connection
-        stream.getTracks().forEach(track => {
-          peerConnectionRef.current.addTrack(track, stream);
-        });
-      }
-      
-      // Set remote description (offer) and create answer
-      if (callData.offer) {
-        await peerConnectionRef.current.setRemoteDescription(
-          new RTCSessionDescription(callData.offer)
-        );
-        
-        // Process any queued ICE candidates
-        processQueuedCandidates();
-        
-        const answer = await peerConnectionRef.current.createAnswer();
-        await peerConnectionRef.current.setLocalDescription(answer);
-        
-        // Send answer to caller
-        socket.emit('make-answer', {
-          to: callData.caller,
-          from: currentUser.username,
-          answer: answer
-        });
-        
-        console.log('Call accepted and answer sent');
-      }
-    } catch (error) {
-      console.error('Error accepting call:', error);
-      setCallStatus('error');
+ // Handle accepting call (for receiver)
+const handleAcceptCall = async () => {
+  setShowAcceptReject(false);
+  setCallStatus('connecting');
+  
+  try {
+    // Initialize peer connection FIRST - before trying to add tracks
+    if (!peerConnectionRef.current) {
+      initializePeerConnection();
     }
-  };
+    
+    // IMPORTANT: Make sure peer connection exists before continuing
+    if (!peerConnectionRef.current) {
+      throw new Error('Failed to create peer connection');
+    }
+    
+    // Get user media if not already obtained
+    if (!localStream) {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: true, 
+        audio: true 
+      });
+      
+      setLocalStream(stream);
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+      
+      // Now that we're sure peerConnectionRef.current exists, add tracks
+      stream.getTracks().forEach(track => {
+        peerConnectionRef.current.addTrack(track, stream);
+      });
+    } else {
+      // Add tracks from existing stream
+      localStream.getTracks().forEach(track => {
+        peerConnectionRef.current.addTrack(track, localStream);
+      });
+    }
+    
+    // Set remote description (offer) and create answer
+    if (callData.offer) {
+      await peerConnectionRef.current.setRemoteDescription(
+        new RTCSessionDescription(callData.offer)
+      );
+      
+      // Process any queued ICE candidates
+      processQueuedCandidates();
+      
+      const answer = await peerConnectionRef.current.createAnswer();
+      await peerConnectionRef.current.setLocalDescription(answer);
+      
+      // Send answer to caller
+      socket.emit('make-answer', {
+        to: callData.caller,
+        from: currentUser.username,
+        answer: answer
+      });
+      
+      console.log('Call accepted and answer sent');
+    }
+  } catch (error) {
+    console.error('Error accepting call:', error);
+    setCallStatus('error');
+  }
+};
 
   // Handle rejecting call
   const handleRejectCall = () => {
