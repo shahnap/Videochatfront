@@ -14,7 +14,32 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
   const iceCandidatesRef = useRef([]);
 
   const otherUser = callData.isInitiator ? callData.callee : callData.caller;
-
+  useEffect(() => {
+    if (!peerConnectionRef.current) return;
+  
+    const pc = peerConnectionRef.current;
+  
+    const handleStateChange = () => {
+      console.log('Connection state:', pc.connectionState);
+      console.log('ICE connection state:', pc.iceConnectionState);
+      console.log('Signaling state:', pc.signalingState);
+      
+      if (pc.iceConnectionState === 'connected') {
+        setCallStatus('connected');
+      } else if (pc.iceConnectionState === 'failed') {
+        console.log('ICE connection failed - restarting');
+        restartIce();
+      }
+    };
+  
+    pc.addEventListener('connectionstatechange', handleStateChange);
+    pc.addEventListener('iceconnectionstatechange', handleStateChange);
+  
+    return () => {
+      pc.removeEventListener('connectionstatechange', handleStateChange);
+      pc.removeEventListener('iceconnectionstatechange', handleStateChange);
+    };
+  }, []);
   // Initialize media and WebRTC connection
   useEffect(() => {
     const initializeCall = async () => {
@@ -97,32 +122,7 @@ peerConnection.ontrack = (event) => {
   }
 };
 // In both components
-useEffect(() => {
-  if (!peerConnectionRef.current) return;
 
-  const pc = peerConnectionRef.current;
-
-  const handleStateChange = () => {
-    console.log('Connection state:', pc.connectionState);
-    console.log('ICE connection state:', pc.iceConnectionState);
-    console.log('Signaling state:', pc.signalingState);
-    
-    if (pc.iceConnectionState === 'connected') {
-      setCallStatus('connected');
-    } else if (pc.iceConnectionState === 'failed') {
-      console.log('ICE connection failed - restarting');
-      restartIce();
-    }
-  };
-
-  pc.addEventListener('connectionstatechange', handleStateChange);
-  pc.addEventListener('iceconnectionstatechange', handleStateChange);
-
-  return () => {
-    pc.removeEventListener('connectionstatechange', handleStateChange);
-    pc.removeEventListener('iceconnectionstatechange', handleStateChange);
-  };
-}, []);
   // In both components (caller and receiver)
 peerConnection.onicecandidate = (event) => {
   if (event.candidate) {
