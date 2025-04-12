@@ -18,7 +18,97 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
   const connectionTimerRef = useRef(null);
   
   const otherUser = callData.isInitiator ? callData.callee : callData.caller;
+  // Add this as a new useEffect
+useEffect(() => {
+  // Check connection progress if stuck in "new" state
+  if (connectionState === 'new' && iceGatheringComplete) {
+    const progressTimer = setTimeout(() => {
+      if (peerConnectionRef.current) {
+        console.warn('Connection diagnistics:');
+        console.warn('- Local Description:', peerConnectionRef.current.localDescription ? 'Set' : 'Not Set');
+        console.warn('- Remote Description:', peerConnectionRef.current.remoteDescription ? 'Set' : 'Not Set');
+        console.warn('- Signaling State:', peerConnectionRef.current.signalingState);
+        console.warn('- ICE Gathering State:', peerConnectionRef.current.iceGatheringState);
+        console.warn('- ICE Connection State:', peerConnectionRef.current.iceConnectionState);
+        console.warn('- Connection State:', peerConnectionRef.current.connectionState);
+        
+        // If both descriptions are set but nothing is happening
+        if (peerConnectionRef.current.localDescription && 
+            peerConnectionRef.current.remoteDescription &&
+            peerConnectionRef.current.iceConnectionState === 'new') {
+          console.warn('DIAGNOSIS: ICE negotiation not starting despite descriptions set');
+          
+          // Force an ICE restart if possible
+          try {
+            peerConnectionRef.current.restartIce();
+            
+            // If initiator, create a new offer with ice restart flag
+            if (callData.isInitiator) {
+              (async () => {
+                try {
+                  const offer = await peerConnectionRef.current.createOffer({
+                    offerToReceiveAudio: true,
+                    offerToReceiveVideo: true,
+                    iceRestart: true
+                  });
+                  offer.sdp = fixSdp(offer.sdp);
+                  await peerConnectionRef.current.setLocalDescription(offer);
+                  
+                  socket.emit('call-user', {
+                    to: otherUser,
+                    from: currentUser.username,
+                    offer: offer
+                  });
+                  console.log('Sent new offer with forced ICE restart');
+                } catch (e) {
+                  console.error('Error creating forced restart offer:', e);
+                }
+              })();
+            }
+          } catch (e) {
+            console.error('Failed to force ICE restart:', e);
+          }
+        }
+      }
+    }, 8000); // Check after 8 seconds
+    
+    return () => clearTimeout(progressTimer);
+  }
+}, [connectionState, iceGatheringComplete, callData.isInitiator, otherUser, currentUser.username, socket]);
+// Add at initialization
+useEffect(() => {
+  // Check for browser compatibility issues
+  const browserCompatCheck = () => {
+    const webrtcDetectedBrowser = navigator.userAgent.toLowerCase();
+    console.log('Browser user agent:', navigator.userAgent);
+    
+    const isFirefox = webrtcDetectedBrowser.indexOf('firefox') > -1;
+    const isChrome = webrtcDetectedBrowser.indexOf('chrome') > -1 && !webrtcDetectedBrowser.indexOf('edge') > -1;
+    const isEdge = webrtcDetectedBrowser.indexOf('edge') > -1;
+    const isSafari = webrtcDetectedBrowser.indexOf('safari') > -1 && !isChrome;
+    
+    console.log('Browser detection:', { isFirefox, isChrome, isEdge, isSafari });
+    
+    // Check for known compatibility issues
+    if (isFirefox && isChrome) {
+      console.warn('Potential Firefox-Chrome compatibility issue detected');
+    }
+    
+    // Check for WebRTC support
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      console.error('This browser does not support WebRTC MediaDevices');
+      return false;
+    }
+    
+    return true;
+  };
   
+  const isCompatible = browserCompatCheck();
+  if (!isCompatible) {
+    setCallStatus('error');
+    alert('This browser may not fully support WebRTC features needed for video calling');
+  }
+}, []);
   // Initialize WebRTC
   useEffect(() => {
     console.log('Initializing media and WebRTC connection...');
@@ -193,44 +283,95 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         };
         
         // Handle remote stream with more detailed logging
-        peerConnection.ontrack = (event) => {
-          console.log('Received remote track:', event.track.kind);
-          if (event.streams && event.streams[0]) {
-            console.log('Setting remote stream');
-            setRemoteStream(event.streams[0]);
+        // peerConnection.ontrack = (event) => {
+        //   console.log('Received remote track:', event.track.kind);
+        //   if (event.streams && event.streams[0]) {
+        //     console.log('Setting remote stream');
+        //     setRemoteStream(event.streams[0]);
             
-            if (remoteVideoRef.current) {
-              console.log('Setting remote video stream');
-              remoteVideoRef.current.srcObject = event.streams[0];
+        //     if (remoteVideoRef.current) {
+        //       console.log('Setting remote video stream');
+        //       remoteVideoRef.current.srcObject = event.streams[0];
               
-              // Monitor video track readiness
-              event.track.onunmute = () => {
-                console.log('Remote track unmuted and ready to play');
-              };
+        //       // Monitor video track readiness
+        //       event.track.onunmute = () => {
+        //         console.log('Remote track unmuted and ready to play');
+        //       };
               
-              // Add event listeners to detect when video starts playing
-              remoteVideoRef.current.onloadedmetadata = () => {
-                console.log('Remote video metadata loaded');
-              };
+        //       // Add event listeners to detect when video starts playing
+        //       remoteVideoRef.current.onloadedmetadata = () => {
+        //         console.log('Remote video metadata loaded');
+        //       };
               
-              remoteVideoRef.current.oncanplay = () => {
-                console.log('Remote video can play');
-              };
-            }
-          } else {
-            console.warn('No remote stream available in ontrack event');
-          }
-        };
+        //       remoteVideoRef.current.oncanplay = () => {
+        //         console.log('Remote video can play');
+        //       };
+        //     }
+        //   } else {
+        //     console.warn('No remote stream available in ontrack event');
+        //   }
+        // };
+        // Add this to your ontrack handler
+peerConnection.ontrack = (event) => {
+  console.log('Received remote track:', event.track.kind, 'enabled:', event.track.enabled, 'muted:', event.track.muted);
+  
+  // Debug track readiness
+  event.track.onmute = () => console.log('Remote track muted');
+  event.track.onunmute = () => console.log('Remote track unmuted');
+  event.track.onended = () => console.log('Remote track ended');
+  
+  if (event.streams && event.streams[0]) {
+    console.log('Setting remote stream with tracks:', 
+      event.streams[0].getTracks().map(t => `${t.kind}:${t.readyState}`).join(', '));
+    
+    // Focus on this part - inspect what's happening with the stream
+    setRemoteStream(event.streams[0]);
+    
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = event.streams[0];
+      
+      // Force play attempt with detailed error logging
+      remoteVideoRef.current.play().catch(e => {
+        console.error('Error playing remote video:', e);
+        // If it's an autoplay policy issue:
+        if (e.name === 'NotAllowedError') {
+          alert('Autoplay blocked. Please interact with the page to enable video.');
+        }
+      });
+    }
+  }
+};
         
         // Initiate call if initiator
         if (callData.isInitiator) {
           console.log('I am the initiator, creating offer');
           try {
-            const offer = await peerConnection.createOffer({
-              offerToReceiveAudio: true,
-              offerToReceiveVideo: true,
-              iceRestart: reconnectAttempts > 0 // Enable ICE restart if reconnecting
-            });
+            // Add this function before setting local/remote descriptions
+function fixSdp(sdp) {
+  // Force H.264 as the preferred codec if available
+  let modifiedSdp = sdp;
+  
+  // Ensure video bandwidth is prioritized
+  modifiedSdp = modifiedSdp.replace(/(m=video.*\r\n)/g, 
+    '$1b=AS:2000\r\n');
+  
+  // Ensure ICE restart is allowed
+  modifiedSdp = modifiedSdp.replace(/(a=ice-options:.*)\r\n/g, 
+    '$1 ice-lite\r\n');
+  
+  return modifiedSdp;
+}
+
+// Then when you create offers/answers:
+const offer = await peerConnection.createOffer({
+  offerToReceiveAudio: true,
+  offerToReceiveVideo: true,
+  iceRestart: reconnectAttempts > 0
+});
+
+// Fix the SDP before setting local description
+offer.sdp = fixSdp(offer.sdp);
+await peerConnection.setLocalDescription(offer);
             console.log('Setting local description (offer):', offer.type);
             await peerConnection.setLocalDescription(offer);
             
