@@ -43,6 +43,7 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
 
   // Initialize WebRTC with improved configuration
  // Initialize WebRTC with improved configuration
+// Initialize WebRTC with improved configuration
 const initializePeerConnection = () => {
   // If a connection exists, check its state
   if (peerConnectionRef.current) {
@@ -107,7 +108,28 @@ const initializePeerConnection = () => {
       }
     });
 
-    // Rest of the event handlers remain the same...
+    // Add the missing ontrack handler
+    pc.ontrack = (event) => {
+      console.log('Received remote track:', event.track.kind);
+      setRemoteStream(event.streams[0]);
+      
+      if (remoteVideoRef.current && event.streams[0]) {
+        console.log('Setting remote video stream');
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
+    };
+
+    // Set up ICE candidate handling
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        console.log('Generated local ICE candidate');
+        socket.emit('ice-candidate', {
+          to: otherUser,
+          from: currentUser.username,
+          candidate: event.candidate
+        });
+      }
+    };
     
     console.log('Peer connection initialized successfully');
     return pc;
