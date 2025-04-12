@@ -80,29 +80,48 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
         };
 
         // Handle ICE candidates
-        peerConnection.onicecandidate = (event) => {
-          if (event.candidate) {
-            // Only send candidates if we have a remote description
-            if (peerConnection.remoteDescription) {
-              socket.emit('ice-candidate', {
-                to: otherUser,
-                from: currentUser.username,
-                candidate: event.candidate
-              });
-            } else {
-              iceCandidatesRef.current.push(event.candidate);
-            }
-          }
-        };
+       // Modify your ICE candidate handler
+peerConnection.onicecandidate = (event) => {
+  if (event.candidate) {
+    console.log('New ICE candidate:', event.candidate.candidate);
+    // Send immediately if we have remote description
+    if (peerConnection.remoteDescription) {
+      socket.emit('ice-candidate', {
+        to: otherUser,
+        from: currentUser.username,
+        candidate: event.candidate
+      });
+    } else {
+      // Queue candidates if no remote description yet
+      console.log('Queuing ICE candidate');
+      iceCandidatesRef.current.push(event.candidate);
+    }
+  } else {
+    console.log('ICE gathering complete');
+  }
+};
 
         // Handle connection state changes
-        peerConnection.oniceconnectionstatechange = () => {
-          console.log('ICE connection state:', peerConnection.iceConnectionState);
-          if (peerConnection.iceConnectionState === 'failed') {
-            restartIce();
-          }
-        };
+        // Add these handlers to your peer connection setup
+peerConnection.oniceconnectionstatechange = () => {
+  console.log('ICE connection state:', peerConnection.iceConnectionState);
+  if (peerConnection.iceConnectionState === 'failed') {
+    console.log('ICE failed, attempting restart');
+    restartIce();
+  }
+};
 
+peerConnection.onconnectionstatechange = () => {
+  console.log('Connection state:', peerConnection.connectionState);
+  if (peerConnection.connectionState === 'connected') {
+    console.log('Successfully connected!');
+    setCallStatus('connected');
+  }
+};
+
+peerConnection.onsignalingstatechange = () => {
+  console.log('Signaling state:', peerConnection.signalingState);
+};
         // Initiate call if initiator
         if (callData.isInitiator && !showAcceptReject) {
           const offer = await peerConnection.createOffer();
@@ -181,36 +200,71 @@ const VideoCall = ({ socket, callData, currentUser, onEndCall }) => {
   }, [socket, otherUser, callData.isInitiator]);
 
   // Handle incoming answers
-  useEffect(() => {
-    if (!socket || !peerConnectionRef.current || !callData.isInitiator) return;
+// Handle incoming answers
+useEffect(() => {
+  if (!socket || !peerConnectionRef.current || !callData.isInitiator) return;
 
-    const handleAnswer = async (data) => {
-      if (data.from === otherUser) {
-        try {
-          await peerConnectionRef.current.setRemoteDescription(
-            new RTCSessionDescription(data.answer)
-          );
-          // Process any queued ICE candidates now that we have remote description
-          while (iceCandidatesRef.current.length > 0) {
-            const candidate = iceCandidatesRef.current.shift();
-            try {
-              await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-            } catch (error) {
-              console.error('Error adding queued ICE candidate:', error);
-            }
+  const handleAnswer = async (data) => {
+    if (data.from === otherUser) {
+      try {
+        console.log('Received answer from:', data.from);
+        const answer = new RTCSessionDescription(data.answer);
+        await peerConnectionRef.current.setRemoteDescription(answer);
+        console.log('Remote description set successfully');
+        
+        // Process any queued ICE candidates
+        while (iceCandidatesRef.current.length > 0) {
+          const candidate = iceCandidatesRef.current.shift();
+          try {
+            await peerConnectionRef.current.addIceCandidate(
+              new RTCIceCandidate(candidate)
+            );
+            console.log('Added queued ICE candidate');
+          } catch (error) {
+            console.error('Error adding queued ICE candidate:', error);
           }
-        } catch (error) {
-          console.error('Error handling answer:', error);
         }
+      } catch (error) {
+        console.error('Error handling answer:', error);
       }
-    };
+    }
+  };
 
-    socket.on('answer-made', handleAnswer);
+  socket.on('answer-made', handleAnswer);
 
-    return () => {
-      socket.off('answer-made', handleAnswer);
-    };
-  }, [socket, otherUser, callData.isInitiator]);
+  return () => {
+    socket.off('answer-made', handleAnswer);
+  };
+}, [socket, otherUser, callData.isInitiator]);
+// Add this to your component state
+const [connectionTimeout, setConnectionTimeout] = useState(false);
+
+// Modify your initialization useEffect
+useEffect(() => {
+  const initializeCall = async () => {
+    try {
+      // Add connection timeout
+      const timeout = setTimeout(() => {
+        if (callStatus === 'connecting') {
+          console.warn('Connection timeout - restarting ICE');
+          setConnectionTimeout(true);
+          restartIce();
+        }
+      }, 30000); // 30 second timeout
+
+      // ... rest of your initialization code ...
+
+      return () => clearTimeout(timeout);
+    } catch (error) {
+     console.log("shahna");
+     
+    }
+  };
+
+  if (!showAcceptReject) {
+    initializeCall();
+  }
+}, [showAcceptReject]);
 
   // Handle incoming answers
   useEffect(() => {
