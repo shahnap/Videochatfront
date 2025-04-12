@@ -39,7 +39,7 @@ const Sidebar = ({ users, currentUser, currentChat, onChatSelect, onLogout }) =>
           </div>
         </div>
       </div>
-      
+      hello worrld
       {/* Contacts */}
       <div className="flex-grow overflow-y-auto">
         <h2 className="px-4 pt-4 pb-2 text-xs font-semibold text-gray-600 uppercase">Contacts</h2>

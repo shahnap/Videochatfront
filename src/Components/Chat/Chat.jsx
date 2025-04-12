@@ -1,5 +1,3 @@
-
-// File: src/components/Chat/Chat.js
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -15,6 +13,7 @@ const Chat = ({ setIsAuthenticated }) => {
   const [currentChat, setCurrentChat] = useState(null);
   const [socket, setSocket] = useState(null);
   const [isCallActive, setIsCallActive] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(true);
   const [callData, setCallData] = useState({
     isReceivingCall: false,
     isInitiator: false,
@@ -22,8 +21,8 @@ const Chat = ({ setIsAuthenticated }) => {
     callee: null,
     offer: null
   });
-      const BaseUrl='https://vediochatapp-2.onrender.com'
-// const BaseUrl='http://localhost:5000'
+  const BaseUrl = 'https://vediochatapp-2.onrender.com';
+  // const BaseUrl='http://localhost:5000'
   const user = JSON.parse(localStorage.getItem('user'));
   const navigate = useNavigate();
   const messagesEndRef = useRef(null);
@@ -145,6 +144,10 @@ const Chat = ({ setIsAuthenticated }) => {
   
   const handleChatSelect = (selectedUser) => {
     setCurrentChat(selectedUser);
+    // On mobile, hide sidebar after selecting a chat
+    if (window.innerWidth < 768) {
+      setShowSidebar(false);
+    }
   };
   
   const handleSendMessage = (content) => {
@@ -223,6 +226,10 @@ const Chat = ({ setIsAuthenticated }) => {
     });
   };
   
+  const toggleSidebar = () => {
+    setShowSidebar(prev => !prev);
+  };
+  
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
@@ -231,14 +238,29 @@ const Chat = ({ setIsAuthenticated }) => {
   };
   
   return (
-    <div className="flex h-screen">
-      <Sidebar
-        users={users}
-        currentUser={user}
-        currentChat={currentChat}
-        onChatSelect={handleChatSelect}
-        onLogout={handleLogout}
-      />
+    <div className="flex h-screen w-full overflow-hidden">
+      {/* Mobile sidebar toggle button */}
+      {currentChat && !showSidebar && (
+        <button 
+          onClick={toggleSidebar}
+          className="absolute top-4 left-4 z-20 md:hidden bg-gray-200 p-2 rounded-full shadow-md"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+      )}
+      
+      {/* Sidebar with responsive behavior */}
+      <div className={`${showSidebar ? 'flex' : 'hidden'} md:flex md:w-1/3 lg:w-1/4 h-full z-10 ${currentChat ? 'absolute md:relative w-full md:w-1/3 lg:w-1/4 bg-white' : ''}`}>
+        <Sidebar
+          users={users}
+          currentUser={user}
+          currentChat={currentChat}
+          onChatSelect={handleChatSelect}
+          onLogout={handleLogout}
+        />
+      </div>
       
       {isCallActive ? (
         <VideoCall
@@ -248,52 +270,61 @@ const Chat = ({ setIsAuthenticated }) => {
           onEndCall={handleEndCall}
         />
       ) : (
-        <div className="flex flex-col flex-grow bg-gray-50">
+        <div className={`flex flex-col flex-grow h-full bg-gray-50 ${showSidebar && currentChat && window.innerWidth < 768 ? 'hidden' : 'flex'}`}>
           {currentChat ? (
             <>
               <div className="flex items-center justify-between p-4 border-b bg-white">
                 <div className="flex items-center">
+                  {!showSidebar && (
+                    <button onClick={toggleSidebar} className="mr-2 md:hidden">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                      </svg>
+                    </button>
+                  )}
                   <img
                     src={currentChat.profilePic}
                     alt={currentChat.displayName}
-                    className="w-10 h-10 rounded-full"
+                    className="w-8 h-8 md:w-10 md:h-10 rounded-full object-cover"
                   />
-                  <h2 className="ml-3 text-lg font-medium">{currentChat.displayName}</h2>
+                  <h2 className="ml-2 md:ml-3 text-base md:text-lg font-medium truncate">{currentChat.displayName}</h2>
                 </div>
-                <div className="flex space-x-3">
+                <div className="flex space-x-2 md:space-x-3">
                   <button
                     onClick={handleStartCall}
-                    className="p-2 text-white bg-teal-600 rounded-full hover:bg-teal-700 focus:outline-none"
+                    className="p-1.5 md:p-2 text-white bg-teal-600 rounded-full hover:bg-teal-700 focus:outline-none"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 md:w-6 md:h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                     </svg>
                   </button>
                   <button
-                    className="p-2 text-white bg-teal-600 rounded-full hover:bg-teal-700 focus:outline-none"
+                    className="p-1.5 md:p-2 text-white bg-teal-600 rounded-full hover:bg-teal-700 focus:outline-none"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 md:w-6 md:h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                     </svg>
                   </button>
                 </div>
               </div>
               
-              <MessageList
-                messages={messages}
-                currentUser={user}
-                messagesEndRef={messagesEndRef}
-              />
+              <div className="flex-grow overflow-y-auto">
+                <MessageList
+                  messages={messages}
+                  currentUser={user}
+                  messagesEndRef={messagesEndRef}
+                />
+              </div>
               
               <MessageInput onSendMessage={handleSendMessage} />
             </>
           ) : (
             <div className="flex items-center justify-center flex-grow">
-              <div className="text-center">
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-16 h-16 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <div className="text-center p-4">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-12 h-12 md:w-16 md:h-16 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                 </svg>
-                <h3 className="mt-2 text-lg font-medium text-gray-700">Select a chat to start messaging</h3>
+                <h3 className="mt-2 text-base md:text-lg font-medium text-gray-700">Select a chat to start messaging</h3>
               </div>
             </div>
           )}
@@ -301,35 +332,30 @@ const Chat = ({ setIsAuthenticated }) => {
       )}
       
       {callData.isReceivingCall && !isCallActive && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="p-6 bg-white rounded-lg shadow-xl">
-            <h3 className="text-lg font-medium text-gray-900">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="p-4 md:p-6 bg-white rounded-lg shadow-xl w-full max-w-sm">
+            <h3 className="text-base md:text-lg font-medium text-gray-900 text-center">
               Incoming call from {callData.caller}
             </h3>
-            <div className="flex justify-end mt-4 space-x-3">
+            <div className="flex justify-center mt-4 space-x-3">
               <button
                 onClick={handleRejectCall}
-                className="px-4 py-2 text-white bg-red-600"
-                ></button>
-             
-                <button
-                  onClick={handleRejectCall}
-                  className="px-4 py-2 text-white bg-red-600 rounded hover:bg-red-700 focus:outline-none"
-                >
-                  Decline
-                </button>
-                <button
-                  onClick={handleAcceptCall}
-                  className="px-4 py-2 text-white bg-green-600 rounded hover:bg-green-700 focus:outline-none"
-                >
-                  Accept
-                </button>
-              </div>
+                className="px-3 py-1.5 md:px-4 md:py-2 text-white bg-red-600 rounded hover:bg-red-700 focus:outline-none"
+              >
+                Decline
+              </button>
+              <button
+                onClick={handleAcceptCall}
+                className="px-3 py-1.5 md:px-4 md:py-2 text-white bg-green-600 rounded hover:bg-green-700 focus:outline-none"
+              >
+                Accept
+              </button>
             </div>
           </div>
-        )}
-      </div>
-    );
-  };
-  
-  export default Chat;
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Chat;
